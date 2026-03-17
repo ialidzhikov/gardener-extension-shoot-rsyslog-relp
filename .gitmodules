@@ -1,0 +1,3 @@
+[submodule "hack/repo-tools"]
+	path = hack/repo-tools
+	url = https://github.com/gardener/repo-tools
