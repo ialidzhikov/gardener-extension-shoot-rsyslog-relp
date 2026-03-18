@@ -1,0 +1,127 @@
+#!/usr/bin/env bash
+#
+# SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
+#
+# SPDX-License-Identifier: Apache-2.0
+
+set -e
+
+WHAT="protobuf codegen manifests logcheck"
+CODEGEN_GROUPS=""
+MANIFESTS_DIRS=""
+MODE=""
+MAX_PARALLEL_WORKERS="4"
+DEFAULT_MANIFESTS_DIRS=(
+  "charts"
+  "cmd"
+  "example"
+  "extensions"
+  "imagevector"
+  "pkg"
+  "plugin"
+  "test"
+  "third_party"
+)
+
+parse_flags() {
+  while test $# -gt 0; do
+    case "$1" in
+      --what)
+        shift
+        WHAT="${1:-$WHAT}"
+        ;;
+      --mode)
+        shift
+        if [[ -n "$1" ]]; then
+        MODE="$1"
+        fi
+        ;;
+      --codegen-groups)
+        shift
+        CODEGEN_GROUPS="${1:-$CODEGEN_GROUPS}"
+        ;;
+      --manifests-dirs)
+        shift
+        MANIFESTS_DIRS="${1:-$MANIFESTS_DIRS}"
+        ;;
+      --max-parallel-workers)
+        shift
+        export MAX_PARALLEL_WORKERS=${1:-$MAX_PARALLEL_WORKERS}
+        ;;
+      *)
+        echo "Unknown argument: $1"
+        exit 1
+        ;;
+    esac
+    shift
+  done
+}
+
+root_module=$(cd "$REPO_ROOT"; go list -m)
+overwrite_paths() {
+  local updated_paths=()
+
+  for option in "${@}"; do
+    updated_paths+=("$root_module/$option/...")
+  done
+
+  echo "${updated_paths[@]}"
+}
+
+run_target() {
+  local target=$1
+  case "$target" in
+    protobuf)
+      $REPO_ROOT/hack/update-protobuf.sh
+      ;;
+    codegen)
+      # Default to sequential mode in CI to avoid race conditions with go install.
+      # kube_codegen.sh functions (gen_helpers, gen_client) internally run 'go install'
+      # for code generators. When running in parallel, multiple processes race to write
+      # the same binaries, causing "already exists and is not an object file" errors.
+      local mode="$MODE"
+      if [[ -z "$mode" ]]; then
+        if [[ -n "${CI:-}" ]]; then
+          mode="sequential"
+        else
+          mode="parallel"
+        fi
+      fi
+      $REPO_ROOT/hack/update-codegen.sh --groups "$CODEGEN_GROUPS" --mode "$mode"
+      ;;
+    manifests)
+      local which=()
+      local mode="${MODE:-parallel}"
+
+      if [[ -z "$MANIFESTS_DIRS" ]]; then
+        which=("${DEFAULT_MANIFESTS_DIRS[@]}")
+      else
+        IFS=' ' read -ra which <<< "$MANIFESTS_DIRS"
+      fi
+
+      printf "\n> Generating manifests for folders: %s\n" "${which[*]}"
+      if [[ "$mode" == "sequential" ]]; then
+        # In sequential mode, paths need to be converted to go package notation (e.g., ./charts/...)
+        $REPO_ROOT/hack/generate-sequential.sh $(overwrite_paths "${which[@]}")
+      elif [[ "$mode" == "parallel" ]]; then
+        $REPO_ROOT/hack/generate-parallel.sh "${which[@]}"
+      else
+        printf "ERROR: Invalid mode ('%s'). Specify either 'parallel' or 'sequential'\n\n" "$mode"
+        exit 1
+      fi
+      ;;
+    logcheck)
+      cd "$REPO_ROOT/$LOGCHECK_DIR" && go generate ./...
+      ;;
+    *)
+      printf "ERROR: Unknown target: $target. Available targets are 'protobuf', 'codegen', 'manifests', 'logcheck'.\n\n"
+      ;;
+  esac
+}
+
+parse_flags "$@"
+
+IFS=' ' read -ra TARGETS <<< "$WHAT"
+for target in "${TARGETS[@]}"; do
+  run_target "$target"
+done
