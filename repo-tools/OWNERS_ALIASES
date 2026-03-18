@@ -1,0 +1,11 @@
+# See the OWNERS docs at https://go.k8s.io/owners
+
+aliases:
+  repo-tools-reviewers:
+  - dimitar-kostadinov
+  - marc1404
+  - RadaBDimitrova
+  repo-tools-approvers:
+  - dimitar-kostadinov
+  - marc1404
+  - RadaBDimitrova
